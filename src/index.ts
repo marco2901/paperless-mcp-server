@@ -4,6 +4,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express from "express";
+import { Request, Response, NextFunction } from "express";
 import { parseArgs } from "node:util";
 import { PaperlessAPI } from "./api/PaperlessAPI";
 import { registerCorrespondentTools } from "./tools/correspondents";
@@ -31,6 +32,71 @@ const resolvedToken = token || process.env.PAPERLESS_API_KEY;
 const resolvedPublicUrl =
   publicUrl || process.env.PAPERLESS_PUBLIC_URL || resolvedBaseUrl;
 const resolvedPort = port ? parseInt(port, 10) : 3000;
+
+// Auth config – same pattern as hero-mcp-server
+const mcpApiKey = process.env.MCP_API_KEY || "";
+const oidcIntrospectionUrl = process.env.OIDC_INTROSPECTION_URL || "";
+const oidcClientId = process.env.OIDC_CLIENT_ID || "";
+const oidcClientSecret = process.env.OIDC_CLIENT_SECRET || "";
+
+async function isAuthorized(req: Request): Promise<boolean> {
+  if (!mcpApiKey) return true;
+
+  const auth = req.headers.authorization || "";
+
+  // 1. Static Bearer token (Claude Desktop / direct API clients)
+  if (auth === `Bearer ${mcpApiKey}`) {
+    console.log("Auth OK: static Bearer token");
+    return true;
+  }
+
+  // 2. JWT via Authelia OIDC Token Introspection (Claude.ai)
+  if (
+    auth.startsWith("Bearer ") &&
+    oidcIntrospectionUrl &&
+    oidcClientId &&
+    oidcClientSecret
+  ) {
+    const jwtToken = auth.slice(7);
+    console.log("JWT received, starting introspection…");
+    try {
+      const credentials = Buffer.from(
+        `${oidcClientId}:${oidcClientSecret}`
+      ).toString("base64");
+      const resp = await fetch(oidcIntrospectionUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Authorization: `Basic ${credentials}`,
+        },
+        body: new URLSearchParams({ token: jwtToken }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const data = (await resp.json()) as { active?: boolean };
+      console.log(`Introspection: HTTP ${resp.status}, active=${data.active}`);
+      return data.active === true;
+    } catch (e) {
+      console.error("Introspection failed:", e);
+    }
+  }
+
+  console.warn(`Auth DENIED for ${req.method} ${req.path}`);
+  return false;
+}
+
+function authMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  isAuthorized(req).then((ok) => {
+    if (ok) {
+      next();
+    } else {
+      res.status(401).send("Unauthorized");
+    }
+  });
+}
 
 if (!resolvedBaseUrl || !resolvedToken) {
   console.error(
@@ -79,6 +145,8 @@ The document tools return JSON data with document IDs that you can use to constr
 
     // Store transports for each session
     const sseTransports: Record<string, SSEServerTransport> = {};
+
+    app.use(authMiddleware);
 
     app.post("/mcp", async (req, res) => {
       try {

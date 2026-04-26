@@ -1,0 +1,32 @@
+services:
+  paperless-mcp-server:
+    image: ghcr.io/marco2901/paperless-mcp-server:latest
+    container_name: paperless-mcp-server
+    restart: unless-stopped
+    environment:
+      - PAPERLESS_URL=${PAPERLESS_URL}
+      - PAPERLESS_API_KEY=${PAPERLESS_API_KEY}
+      - PAPERLESS_PUBLIC_URL=${PAPERLESS_PUBLIC_URL}
+      - MCP_API_KEY=${MCP_API_KEY}
+      # Authelia OIDC – für Claude.ai OAuth
+      - OIDC_INTROSPECTION_URL=http://authelia:9091/api/oidc/introspection
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
+    expose:
+      - "3000"
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik
+      - traefik.http.routers.paperless-mcp.rule=Host(`mcp.biegel24.de`)
+      - traefik.http.routers.paperless-mcp.entrypoints=websecure
+      - traefik.http.services.paperless-mcp.loadbalancer.server.port=3000
+      - traefik.http.routers.paperless-mcp.tls.certresolver=mydnschallenge
+      - traefik.http.routers.paperless-mcp.tls=true
+      # Kein middlewares-authelia@file – Auth läuft direkt im Server via OIDC Introspection
+      - traefik.http.routers.paperless-mcp.middlewares=middlewares-rate-limit@file,middlewares-secure-headers@file
+    networks:
+      - traefik
+
+networks:
+  traefik:
+    external: true
