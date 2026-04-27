@@ -38,6 +38,8 @@ const mcpApiKey = process.env.MCP_API_KEY || "";
 const oidcIntrospectionUrl = process.env.OIDC_INTROSPECTION_URL || "";
 const oidcClientId = process.env.OIDC_CLIENT_ID || "";
 const oidcClientSecret = process.env.OIDC_CLIENT_SECRET || "";
+// Base URL of the Authelia OAuth/OIDC server (e.g. https://authelia.biegel24.de)
+const oauthIssuer = process.env.OAUTH_ISSUER || "";
 
 async function isAuthorized(req: Request): Promise<boolean> {
   if (!mcpApiKey) return true;
@@ -145,6 +147,25 @@ The document tools return JSON data with document IDs that you can use to constr
 
     // Store transports for each session
     const sseTransports: Record<string, SSEServerTransport> = {};
+
+    // OAuth 2.0 Authorization Server Metadata (RFC 8414)
+    // Must be BEFORE authMiddleware – publicly accessible so Claude.ai can
+    // discover the Authelia OAuth endpoints without a token.
+    if (oauthIssuer) {
+      app.get("/.well-known/oauth-authorization-server", (_req, res) => {
+        res.json({
+          issuer: oauthIssuer,
+          authorization_endpoint: `${oauthIssuer}/api/oidc/authorization`,
+          token_endpoint: `${oauthIssuer}/api/oidc/token`,
+          jwks_uri: `${oauthIssuer}/jwks.json`,
+          introspection_endpoint: `${oauthIssuer}/api/oidc/introspection`,
+          response_types_supported: ["code"],
+          grant_types_supported: ["authorization_code", "refresh_token"],
+          code_challenge_methods_supported: ["S256"],
+          scopes_supported: ["openid", "profile", "email"],
+        });
+      });
+    }
 
     app.use(authMiddleware);
 

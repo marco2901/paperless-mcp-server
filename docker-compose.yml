@@ -12,6 +12,8 @@ services:
       - OIDC_INTROSPECTION_URL=http://authelia:9091/api/oidc/introspection
       - OIDC_CLIENT_ID=${OIDC_CLIENT_ID}
       - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
+      # Öffentliche Authelia-URL – für OAuth Discovery Endpoint
+      - OAUTH_ISSUER=https://authelia.biegel24.de
     expose:
       - "3000"
     labels:
