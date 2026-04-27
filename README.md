@@ -1,578 +1,158 @@
-<!-- [![MseeP.ai Security Assessment Badge](https://mseep.net/pr/nloui-paperless-mcp-badge.png)](https://mseep.ai/app/nloui-paperless-mcp) -->
-
 # Paperless-NGX MCP Server
 
-![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/baruchiro/paperless-mcp?utm_source=oss&utm_medium=github&utm_campaign=baruchiro%2Fpaperless-mcp&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
+A fork of [baruchiro/paperless-mcp](https://github.com/baruchiro/paperless-mcp) with added **OAuth 2.0 / OIDC authentication** for use with [Claude.ai](https://claude.ai) remote MCP connectors and self-hosted identity providers like [Authelia](https://www.authelia.com/).
 
-An MCP (Model Context Protocol) server for interacting with a Paperless-NGX API server. This server provides tools for managing documents, tags, correspondents, and document types in your Paperless-NGX instance.
+## What's different from upstream
+
+- Bearer token validation (`MCP_API_KEY`) for Claude Desktop / direct clients
+- JWT validation via OIDC Token Introspection for Claude.ai OAuth flow
+- OAuth 2.0 Authorization Server discovery endpoint (`/.well-known/oauth-authorization-server`) so Claude.ai can auto-discover your identity provider
+- Docker image published to `ghcr.io/marco2901/paperless-mcp-server:latest`
 
 ## Quick Start
 
-[![Install MCP Server](https://cursor.com/deeplink/mcp-install-light.svg)](https://cursor.com/install-mcp?name=paperless&config=eyJjb21tYW5kIjoibnB4IC15IEBiYXJ1Y2hpcm8vcGFwZXJsZXNzLW1jcEBsYXRlc3QiLCJlbnYiOnsiUEFQRVJMRVNTX1VSTCI6Imh0dHA6Ly95b3VyLXBhcGVybGVzcy1pbnN0YW5jZTo4MDAwIiwiUEFQRVJMRVNTX0FQSV9LRVkiOiJ5b3VyLWFwaS10b2tlbiJ9fQ%3D%3D)
-
-### Installation
-
-Add these to your MCP config file:
-
-// STDIO mode (recommended for local or CLI use)
-```json
-"paperless": {
-  "command": "npx",
-  "args": [
-    "-y",
-    "@baruchiro/paperless-mcp@latest",
-  ],
-  "env": {
-    "PAPERLESS_URL": "http://your-paperless-instance:8000",
-    "PAPERLESS_API_KEY": "your-api-token",
-    "PAPERLESS_PUBLIC_URL": "https://your-public-domain.com"
-  }
-}
-```
-
-// HTTP mode (recommended for Docker or remote use)
-```json
-"paperless": {
-  "command": "docker",
-  "args": [
-    "run",
-    "-i",
-    "--rm",
-    "ghcr.io/baruchiro/paperless-mcp:latest",
-  ],
-  "env": {
-    "PAPERLESS_URL": "http://your-paperless-instance:8000",
-    "PAPERLESS_API_KEY": "your-api-token",
-    "PAPERLESS_PUBLIC_URL": "https://your-public-domain.com"
-  }
-}
-```
-
-3. Get your API token:
-   1. Log into your Paperless-NGX instance
-   2. Click your username in the top right
-   3. Select "My Profile"
-   4. Click the circular arrow button to generate a new token
-
-4. Replace the placeholders in your MCP config:
-   - `http://your-paperless-instance:8000` with your Paperless-NGX URL
-   - `your-api-token` with the token you just generated
-   - `https://your-public-domain.com` with your public Paperless-NGX URL (optional, falls back to PAPERLESS_URL)
-
-That's it! Now you can ask Claude to help you manage your Paperless-NGX documents.
-
-### Example Usage
-
-Here are some things you can ask Claude to do:
-
-- "Show me all documents tagged as 'Invoice'"
-- "Search for documents containing 'tax return'"
-- "Create a new tag called 'Receipts' with color #FF0000"
-- "Download document #123"
-- "List all correspondents"
-- "Create a new document type called 'Bank Statement'"
-
-## Available Tools
-
-### Document Operations
-
-#### list_documents
-Get a paginated list of all documents.
-
-Parameters:
-- page (optional): Page number
-- page_size (optional): Number of documents per page
-
-```typescript
-list_documents({
-  page: 1,
-  page_size: 25
-})
-```
-
-#### get_document
-Get a specific document by ID.
-
-Parameters:
-- id: Document ID
-
-```typescript
-get_document({
-  id: 123
-})
-```
-
-#### search_documents
-Full-text search across documents.
-
-Parameters:
-- query: Search query string
-
-```typescript
-search_documents({
-  query: "invoice 2024"
-})
-```
-
-#### download_document
-Download a document file by ID.
-
-Parameters:
-- id: Document ID
-- original (optional): If true, downloads original file instead of archived version
-
-```typescript
-download_document({
-  id: 123,
-  original: false
-})
-```
-
-#### get_document_thumbnail
-Get a document thumbnail (image preview) by ID. Returns the thumbnail as a base64-encoded WebP image resource.
-
-Parameters:
-- id: Document ID
-
-```typescript
-get_document_thumbnail({
-  id: 123
-})
-```
-
-#### bulk_edit_documents
-Perform bulk operations on multiple documents.
-
-Parameters:
-- documents: Array of document IDs
-- method: One of:
-  - set_correspondent: Set correspondent for documents
-  - set_document_type: Set document type for documents
-  - set_storage_path: Set storage path for documents
-  - add_tag: Add a tag to documents
-  - remove_tag: Remove a tag from documents
-  - modify_tags: Add and/or remove multiple tags
-  - delete: Delete documents
-  - reprocess: Reprocess documents
-  - set_permissions: Set document permissions
-  - merge: Merge multiple documents
-  - split: Split a document into multiple documents
-  - rotate: Rotate document pages
-  - delete_pages: Delete specific pages from a document
-- Additional parameters based on method:
-  - correspondent: ID for set_correspondent
-  - document_type: ID for set_document_type
-  - storage_path: ID for set_storage_path
-  - tag: ID for add_tag/remove_tag
-  - add_tags: Array of tag IDs for modify_tags
-  - remove_tags: Array of tag IDs for modify_tags
-  - permissions: Object for set_permissions with owner, permissions, merge flag
-  - metadata_document_id: ID for merge to specify metadata source
-  - delete_originals: Boolean for merge/split
-  - pages: String for split "[1,2-3,4,5-7]" or delete_pages "[2,3,4]"
-  - degrees: Number for rotate (90, 180, or 270)
-
-Examples:
-```typescript
-// Add a tag to multiple documents
-bulk_edit_documents({
-  documents: [1, 2, 3],
-  method: "add_tag",
-  tag: 5
-})
-
-// Set correspondent and document type
-bulk_edit_documents({
-  documents: [4, 5],
-  method: "set_correspondent",
-  correspondent: 2
-})
-
-// Merge documents
-bulk_edit_documents({
-  documents: [6, 7, 8],
-  method: "merge",
-  metadata_document_id: 6,
-  delete_originals: true
-})
-
-// Split document into parts
-bulk_edit_documents({
-  documents: [9],
-  method: "split",
-  pages: "[1-2,3-4,5]"
-})
-
-// Modify multiple tags at once
-bulk_edit_documents({
-  documents: [10, 11],
-  method: "modify_tags",
-  add_tags: [1, 2],
-  remove_tags: [3, 4]
-})
-
-// Modify custom fields
-bulk_edit_documents({
-  documents: [12, 13],
-  method: "modify_custom_fields",
-  add_custom_fields: {
-    "2": "שנה"
-  }
-})
-```
-
-#### post_document
-Upload a new document to Paperless-NGX.
-
-Parameters:
-- file: Base64 encoded file content
-- filename: Name of the file
-- title (optional): Title for the document
-- created (optional): DateTime when the document was created (e.g. "2024-01-19" or "2024-01-19 06:15:00+02:00")
-- correspondent (optional): ID of a correspondent
-- document_type (optional): ID of a document type
-- storage_path (optional): ID of a storage path
-- tags (optional): Array of tag IDs
-- archive_serial_number (optional): Archive serial number
-- custom_fields (optional): Array of custom field IDs
-
-```typescript
-post_document({
-  file: "base64_encoded_content",
-  filename: "invoice.pdf",
-  title: "January Invoice",
-  created: "2024-01-19",
-  correspondent: 1,
-  document_type: 2,
-  tags: [1, 3],
-  archive_serial_number: "2024-001",
-  custom_fields: [1, 2]
-})
-```
-
-### Tag Operations
-
-#### list_tags
-Get all tags.
-
-```typescript
-list_tags()
-```
-
-#### create_tag
-Create a new tag.
-
-Parameters:
-- name: Tag name
-- color (optional): Hex color code (e.g. "#ff0000")
-- match (optional): Text pattern to match
-- matching_algorithm (optional): Number between 0 and 6:
-  0 - None
-  1 - Any word
-  2 - All words
-  3 - Exact match
-  4 - Regular expression
-  5 - Fuzzy word
-  6 - Automatic
-
-```typescript
-create_tag({
-  name: "Invoice",
-  color: "#ff0000",
-  match: "invoice",
-  matching_algorithm: 5
-})
-```
-
-### Correspondent Operations
-
-#### list_correspondents
-Get all correspondents.
-
-```typescript
-list_correspondents()
-```
-
-#### create_correspondent
-Create a new correspondent.
-
-Parameters:
-- name: Correspondent name
-- match (optional): Text pattern to match
-- matching_algorithm (optional): Number between 0 and 6:
-  0 - None
-  1 - Any word
-  2 - All words
-  3 - Exact match
-  4 - Regular expression
-  5 - Fuzzy word
-  6 - Automatic
-
-```typescript
-create_correspondent({
-  name: "ACME Corp",
-  match: "ACME",
-  matching_algorithm: 5
-})
-```
-
-### Document Type Operations
-
-#### list_document_types
-Get all document types.
-
-```typescript
-list_document_types()
-```
-
-#### create_document_type
-Create a new document type.
-
-Parameters:
-- name: Document type name
-- match (optional): Text pattern to match
-- matching_algorithm (optional): Number between 0 and 6:
-  0 - None
-  1 - Any word
-  2 - All words
-  3 - Exact match
-  4 - Regular expression
-  5 - Fuzzy word
-  6 - Automatic
-
-```typescript
-create_document_type({
-  name: "Invoice",
-  match: "invoice total amount due",
-  matching_algorithm: 1
-})
-```
-
-### Custom Field Operations
-
-#### list_custom_fields
-Get all custom fields.
-
-```typescript
-list_custom_fields()
-```
-
-#### get_custom_field
-Get a specific custom field by ID.
-
-Parameters:
-- id: Custom field ID
-
-```typescript
-get_custom_field({
-  id: 1
-})
-```
-
-#### create_custom_field
-Create a new custom field.
-
-Parameters:
-- name: Custom field name
-- data_type: One of "string", "url", "date", "boolean", "integer", "float", "monetary", "documentlink", "select"
-- extra_data (optional): Extra data for the custom field, such as select options
-
-```typescript
-create_custom_field({
-  name: "Invoice Number",
-  data_type: "string"
-})
-```
-
-#### update_custom_field
-Update an existing custom field.
-
-Parameters:
-- id: Custom field ID
-- name (optional): New custom field name
-- data_type (optional): New data type
-- extra_data (optional): Extra data for the custom field
-
-```typescript
-update_custom_field({
-  id: 1,
-  name: "Updated Invoice Number",
-  data_type: "string"
-})
-```
-
-#### delete_custom_field
-Delete a custom field.
-
-Parameters:
-- id: Custom field ID
-
-```typescript
-delete_custom_field({
-  id: 1
-})
-```
-
-#### bulk_edit_custom_fields
-Perform bulk operations on multiple custom fields.
-
-Parameters:
-- custom_fields: Array of custom field IDs
-- operation: One of "delete"
-
-```typescript
-bulk_edit_custom_fields({
-  custom_fields: [1, 2, 3],
-  operation: "delete"
-})
-```
-
-## Error Handling
-
-The server will show clear error messages if:
-- The Paperless-NGX URL or API token is incorrect
-- The Paperless-NGX server is unreachable
-- The requested operation fails
-- The provided parameters are invalid
-
-## Development
-
-Want to contribute or modify the server? Here's what you need to know:
-
-1. Clone the repository
-2. Install dependencies:
-```bash
-npm install
-```
-
-3. Make your changes to server.js
-4. Test locally:
-```bash
-node server.js http://localhost:8000 your-test-token
-```
-
-The server is built with:
-- [litemcp](https://github.com/wong2/litemcp): A TypeScript framework for building MCP servers
-- [zod](https://github.com/colinhacks/zod): TypeScript-first schema validation
-
-## API Documentation
-
-This MCP server implements endpoints from the Paperless-NGX REST API. For more details about the underlying API, see the [official documentation](https://docs.paperless-ngx.com/api/).
-
-## Running the MCP Server
-
-The MCP server can be run in two modes:
-
-### 1. stdio (default)
-
-This is the default mode. The server communicates over stdio, suitable for CLI and direct integrations.
-
-```
-npm run start -- <baseUrl> <token>
-```
-
-### 2. HTTP (Streamable HTTP Transport)
-
-To run the server as an HTTP service, use the `--http` flag. You can also specify the port with `--port` (default: 3000). This mode requires [Express](https://expressjs.com/) to be installed (it is included as a dependency).
-
-```
-npm run start -- <baseUrl> <token> --http --port 3000
-```
-
-- The MCP API will be available at `POST /mcp` on the specified port.
-- Each request is handled statelessly, following the [StreamableHTTPServerTransport](https://github.com/modelcontextprotocol/typescript-sdk) pattern.
-- GET and DELETE requests to `/mcp` will return 405 Method Not Allowed.
-
-<details>
-<summary>Docker Deployment</summary>
-
-The MCP server can be deployed using Docker and Docker Compose. The Docker image automatically runs in HTTP mode with SSE (Server-Sent Events) support on port 3000.
-
-### Docker Compose Configuration
-
-Create a `docker-compose.yml` file:
+### Docker Compose (with Traefik + Authelia)
 
 ```yaml
 services:
   paperless-mcp:
+    image: ghcr.io/marco2901/paperless-mcp-server:latest
     container_name: paperless-mcp
-    image: ghcr.io/baruchiro/paperless-mcp:latest
-    environment:
-      - PAPERLESS_URL=http://your-paperless-ngx-server:8000
-      - PAPERLESS_API_KEY=your-paperless-api-key
-      - PAPERLESS_PUBLIC_URL=https://paperless-ngx.yourpublicurl.com
-    ports:
-      - "3000:3000"
     restart: unless-stopped
+    environment:
+      PAPERLESS_URL: "http://webserver:8000"
+      PAPERLESS_API_KEY: "your-paperless-api-token"
+      PAPERLESS_PUBLIC_URL: "https://docs.example.com"
+      # Auth
+      MCP_API_KEY: "your-static-token-for-claude-desktop"
+      OIDC_INTROSPECTION_URL: "http://authelia:9091/api/oidc/introspection"
+      OIDC_CLIENT_ID: "paperless-mcp"
+      OIDC_CLIENT_SECRET: "your-oidc-client-secret"
+      OAUTH_ISSUER: "https://authelia.example.com"
+    expose:
+      - "3000"
+    depends_on:
+      - webserver
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik
+      - traefik.http.routers.paperless-mcp.rule=Host(`mcp.example.com`)
+      - traefik.http.routers.paperless-mcp.entrypoints=websecure
+      - traefik.http.services.paperless-mcp.loadbalancer.server.port=3000
+      - traefik.http.routers.paperless-mcp.tls.certresolver=mydnschallenge
+      - traefik.http.routers.paperless-mcp.tls=true
+      - traefik.http.routers.paperless-mcp.middlewares=middlewares-rate-limit@file,middlewares-secure-headers@file
+    networks:
+      - default
+      - traefik
+
+networks:
+  traefik:
+    external: true
 ```
 
-Then run:
-```bash
-docker-compose up -d
-```
+> **Note:** Do not add `middlewares-authelia@file` to the Traefik labels — auth is handled directly inside the server via OIDC introspection.
 
-### Using with Continue VS Code Extension
-
-If you're using the [Continue VS Code extension](https://continue.dev/), you can configure it to use the Dockerized MCP server via SSE.
-
-Create or edit `.continue/mcpServers/paperless-mcp.yaml` at your workspace root:
-
-```yaml
-name: Paperless
-version: 0.0.1
-schema: v1
-mcpServers:
-  - name: Paperless
-    type: sse
-    url: http://localhost:3000/sse
-```
-
-**Notes:**
-- Replace `localhost` with your Docker host's IP address or hostname if running on a remote server
-- The Docker container handles authentication via environment variables, so no credentials are needed in the Continue config
-- The SSE endpoint is available at `/sse` on the configured port (default: 3000)
-
-</details>
-
-# Credits
-
-This project is a fork of [nloui/paperless-mcp](https://github.com/nloui/paperless-mcp). Many thanks to the original author for their work. Contributions and improvements may be returned upstream.
-
-## Debugging
-
-To debug the MCP server in VS Code, use the following launch configuration:
+### Claude Desktop (stdio)
 
 ```json
-{
-    "type": "node",
-    "request": "launch",
-    "name": "Debug Paperless MCP (HTTP, ts-node ESM)",
-    "program": "${workspaceFolder}/node_modules/ts-node/dist/bin.js",
-    "args": [
-        "--esm",
-        "src/index.ts",
-        "--http",
-        "--baseUrl",
-        "http://your-paperless-instance:8000",
-        "--token",
-        "your-api-token",
-        "--port",
-        "3002"
-    ],
-    "env": {
-        "NODE_OPTIONS": "--loader ts-node/esm",
-    },
-    "console": "integratedTerminal",
-    "skipFiles": [
-        "<node_internals>/**"
-    ]
+"paperless": {
+  "command": "npx",
+  "args": ["-y", "@baruchiro/paperless-mcp@latest"],
+  "env": {
+    "PAPERLESS_URL": "http://your-paperless-instance:8000",
+    "PAPERLESS_API_KEY": "your-api-token"
+  }
 }
 ```
 
-**Important:** Before debugging, uncomment the following line in `src/index.ts` (around line 175):
+## Authentication
 
-```typescript
-// await new Promise((resolve) => setTimeout(resolve, 1000000));
+The server supports two authentication modes simultaneously:
+
+| Mode | How it works | Use case |
+|------|-------------|----------|
+| **Static Bearer token** | `Authorization: Bearer <MCP_API_KEY>` | Claude Desktop, direct API clients |
+| **OIDC JWT introspection** | Bearer JWT validated via Authelia introspection endpoint | Claude.ai OAuth flow |
+
+If `MCP_API_KEY` is not set, the server accepts all requests (useful for local/trusted network setups).
+
+### Connecting Claude.ai
+
+1. Open Claude.ai → Settings → Connectors → Add custom connector
+2. **Remote MCP Server URL**: `https://mcp.example.com/sse`
+3. **OAuth Client ID**: your Authelia OIDC client ID (e.g. `paperless-mcp`)
+4. **OAuth Client Secret**: your plaintext OIDC client secret
+
+Claude.ai will fetch `/.well-known/oauth-authorization-server` from your MCP server to discover the Authelia endpoints automatically, then redirect through the OAuth flow.
+
+### Authelia OIDC Client
+
+Add a client entry to your Authelia configuration:
+
+```yaml
+identity_providers:
+  oidc:
+    clients:
+      - client_id: paperless-mcp
+        client_name: Paperless MCP
+        client_secret: "$pbkdf2-sha512$..."  # bcrypt/pbkdf2 hash
+        authorization_policy: one_factor
+        token_endpoint_auth_method: client_secret_basic
+        redirect_uris:
+          - https://claude.ai/oauth/callback
+        scopes: [openid, profile, email]
+        grant_types: [authorization_code, refresh_token]
 ```
 
-This prevents the server from exiting immediately and allows you to set breakpoints and debug the code.
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `PAPERLESS_URL` | ✓ | Internal URL of your Paperless-NGX instance |
+| `PAPERLESS_API_KEY` | ✓ | Paperless-NGX API token |
+| `PAPERLESS_PUBLIC_URL` | | Public URL for document links (falls back to `PAPERLESS_URL`) |
+| `MCP_API_KEY` | | Static Bearer token for Claude Desktop |
+| `OIDC_INTROSPECTION_URL` | | Authelia introspection endpoint (internal URL) |
+| `OIDC_CLIENT_ID` | | OIDC client ID registered in Authelia |
+| `OIDC_CLIENT_SECRET` | | OIDC client secret (plaintext) |
+| `OAUTH_ISSUER` | | Public base URL of your Authelia instance |
+
+## Available Tools
+
+### Documents
+- `list_documents` — paginated document list
+- `get_document` — document by ID
+- `search_documents` — full-text search
+- `get_document_content` — extracted text content
+- `get_document_thumbnail` — thumbnail as base64 WebP
+- `download_document` — download original or archived file
+- `post_document` — upload a new document
+- `update_document` — update document metadata
+- `bulk_edit_documents` — bulk operations (tag, correspondent, merge, split, rotate, delete…)
+
+### Tags
+- `list_tags`, `create_tag`, `update_tag`, `delete_tag`, `bulk_edit_tags`
+
+### Correspondents
+- `list_correspondents`, `get_correspondent`, `create_correspondent`, `update_correspondent`, `delete_correspondent`, `bulk_edit_correspondents`
+
+### Document Types
+- `list_document_types`, `get_document_type`, `create_document_type`, `update_document_type`, `delete_document_type`, `bulk_edit_document_types`
+
+### Custom Fields
+- `list_custom_fields`, `get_custom_field`, `create_custom_field`, `update_custom_field`, `delete_custom_field`, `bulk_edit_custom_fields`
+
+## Development
+
+```bash
+git clone https://github.com/marco2901/paperless-mcp-server.git
+cd paperless-mcp-server
+npm install
+npm run start -- --baseUrl http://localhost:8000 --token your-token --http --port 3000
+```
+
+## Credits
+
+- [baruchiro/paperless-mcp](https://github.com/baruchiro/paperless-mcp) — upstream project
+- [nloui/paperless-mcp](https://github.com/nloui/paperless-mcp) — original author
