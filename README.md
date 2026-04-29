@@ -29,6 +29,7 @@ services:
       OIDC_CLIENT_ID: "paperless-mcp"
       OIDC_CLIENT_SECRET: "your-oidc-client-secret"
       OAUTH_ISSUER: "https://authelia.example.com"
+      MCP_SERVER_URL: "https://mcp.example.com"
     expose:
       - "3000"
     depends_on:
@@ -84,7 +85,7 @@ If `MCP_API_KEY` is not set, the server accepts all requests (useful for local/t
 3. **OAuth Client ID**: your Authelia OIDC client ID (e.g. `paperless-mcp`)
 4. **OAuth Client Secret**: your plaintext OIDC client secret
 
-Claude.ai will fetch `/.well-known/oauth-authorization-server` from your MCP server to discover the Authelia endpoints automatically, then redirect through the OAuth flow.
+Claude.ai first fetches `/.well-known/oauth-protected-resource` (RFC 9728) to find out which authorization server protects this resource, then fetches `/.well-known/oauth-authorization-server` (RFC 8414) from Authelia to get all OAuth endpoints, and finally redirects through the standard OAuth PKCE flow.
 
 ### Authelia OIDC Client
 
@@ -117,6 +118,7 @@ identity_providers:
 | `OIDC_CLIENT_ID` | | OIDC client ID registered in Authelia |
 | `OIDC_CLIENT_SECRET` | | OIDC client secret (plaintext) |
 | `OAUTH_ISSUER` | | Public base URL of your Authelia instance |
+| `MCP_SERVER_URL` | | Public URL of this MCP server (e.g. `https://mcp.example.com`) — required for RFC 9728 Protected Resource Metadata |
 
 ## Available Tools
 

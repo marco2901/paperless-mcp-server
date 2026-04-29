@@ -40,6 +40,8 @@ const oidcClientId = process.env.OIDC_CLIENT_ID || "";
 const oidcClientSecret = process.env.OIDC_CLIENT_SECRET || "";
 // Base URL of the Authelia OAuth/OIDC server (e.g. https://authelia.biegel24.de)
 const oauthIssuer = process.env.OAUTH_ISSUER || "";
+// Public URL of this MCP server (e.g. https://mcp.biegel24.de)
+const mcpServerUrl = process.env.MCP_SERVER_URL || "";
 
 async function isAuthorized(req: Request): Promise<boolean> {
   if (!mcpApiKey) return true;
@@ -148,9 +150,25 @@ The document tools return JSON data with document IDs that you can use to constr
     // Store transports for each session
     const sseTransports: Record<string, SSEServerTransport> = {};
 
-    // OAuth 2.0 Authorization Server Metadata (RFC 8414)
-    // Must be BEFORE authMiddleware – publicly accessible so Claude.ai can
-    // discover the Authelia OAuth endpoints without a token.
+    // Both discovery endpoints must be BEFORE authMiddleware – publicly
+    // accessible so Claude.ai can bootstrap the OAuth flow without a token.
+
+    // RFC 9728 – OAuth 2.0 Protected Resource Metadata
+    // Claude.ai fetches this FIRST to find out which authorization server
+    // protects this resource.
+    if (oauthIssuer && mcpServerUrl) {
+      app.get("/.well-known/oauth-protected-resource", (_req, res) => {
+        res.json({
+          resource: mcpServerUrl,
+          authorization_servers: [oauthIssuer],
+          bearer_methods_supported: ["header"],
+          scopes_supported: ["openid", "profile", "email"],
+        });
+      });
+    }
+
+    // RFC 8414 – OAuth 2.0 Authorization Server Metadata
+    // Describes all Authelia endpoints Claude.ai needs for the OAuth flow.
     if (oauthIssuer) {
       app.get("/.well-known/oauth-authorization-server", (_req, res) => {
         res.json({

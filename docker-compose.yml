@@ -14,6 +14,8 @@ services:
       - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
       # Öffentliche Authelia-URL – für OAuth Discovery Endpoint
       - OAUTH_ISSUER=https://authelia.biegel24.de
+      # Öffentliche URL dieses MCP-Servers – für RFC 9728 Protected Resource Metadata
+      - MCP_SERVER_URL=https://mcp.biegel24.de
     expose:
       - "3000"
     labels:
