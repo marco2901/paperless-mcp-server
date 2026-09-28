@@ -128,8 +128,9 @@ identity_providers:
 - `search_documents` — full-text search
 - `get_document_content` — extracted text content
 - `get_document_thumbnail` — thumbnail as base64 WebP
-- `download_document` — download original or archived file
-- `post_document` — upload a new document
+- `download_document` — download original or archived file (inline base64, up to 5 MB)
+- `paperless_file_link` — single-use download link (10 min) for a document, e.g. as `sourceUrl` for a OneDrive upload; served at `/files/<token>` without auth, requires `MCP_SERVER_URL`
+- `post_document` — upload a new document, either as base64 (`file`) or fetched by the server from a `url`; waits up to 20 s and returns the new document id
 - `update_document` — update document metadata
 - `bulk_edit_documents` — bulk operations (tag, correspondent, merge, split, rotate, delete…)
 

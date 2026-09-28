@@ -134,6 +134,9 @@ export class PaperlessAPI {
           Authorization: `Token ${this.token}`,
           ...formData.getHeaders(),
         },
+        // axios caps request bodies at 10 MB in Node by default.
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
       }
     );
 

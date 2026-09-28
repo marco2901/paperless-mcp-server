@@ -1,13 +1,96 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp";
+import axios from "axios";
 import { z } from "zod";
 import { convertDocsWithNames } from "../api/documentEnhancer";
+import {
+  DEFAULT_TTL_SECONDS,
+  FILES_ROUTE,
+  fileLinks,
+  filenameFromContentDisposition,
+} from "../api/fileLinks";
 import { PaperlessAPI } from "../api/PaperlessAPI";
 import { arrayNotEmpty, objectNotEmpty } from "./utils/empty";
 import { withErrorHandling } from "./utils/middlewares";
 import { validateCustomFields } from "./utils/monetary";
 import { CUSTOM_FIELD_VALUE_DESCRIPTION } from "./utils/descriptions";
 
-export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
+// Larger files go through paperless_file_link instead of base64 in the chat.
+const MAX_INLINE_BYTES = 5 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+const TASK_WAIT_MS = 20000;
+
+function headerValue(headers: any, name: string): string | undefined {
+  const value =
+    typeof headers?.get === "function" ? headers.get(name) : headers?.[name];
+  return value == null ? undefined : String(value);
+}
+
+export async function fetchDocumentFile(
+  api: PaperlessAPI,
+  id: number,
+  original = false
+) {
+  const response = await api.downloadDocument(id, original);
+  const data = Buffer.from(response.data);
+  const filename = filenameFromContentDisposition(
+    headerValue(response.headers, "content-disposition"),
+    `document-${id}.pdf`
+  );
+  const mimeType =
+    headerValue(response.headers, "content-type")?.split(";")[0].trim() ||
+    "application/octet-stream";
+  return { data, filename, mimeType };
+}
+
+async function loadUploadSource(args: { file?: string; url?: string }) {
+  if (args.url) {
+    if (!/^https?:\/\//i.test(args.url)) {
+      throw new Error("url must be an http(s) URL.");
+    }
+    const response = await axios.get<ArrayBuffer>(args.url, {
+      responseType: "arraybuffer",
+      timeout: 60000,
+      maxContentLength: MAX_UPLOAD_BYTES,
+    });
+    return Buffer.from(response.data);
+  }
+  if (!args.file) {
+    throw new Error("Either 'file' (base64) or 'url' is required.");
+  }
+  // Accept data URLs and line-wrapped base64.
+  const base64 = args.file.replace(/^data:[^,]*;base64,/, "").replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+    throw new Error(
+      "Invalid base64-encoded file data. Please provide a valid base64 string."
+    );
+  }
+  return Buffer.from(base64, "base64");
+}
+
+async function waitForConsumeTask(api: PaperlessAPI, taskId: string) {
+  const deadline = Date.now() + TASK_WAIT_MS;
+  let task: any;
+  while (Date.now() < deadline) {
+    const tasks = await api.request<any[]>(
+      `/tasks/?task_id=${encodeURIComponent(taskId)}`
+    );
+    task = Array.isArray(tasks) ? tasks[0] : undefined;
+    if (task && ["SUCCESS", "FAILURE", "REVOKED"].includes(task.status)) break;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  return task;
+}
+
+export interface DocumentToolOptions {
+  /** Public URL of this MCP server; enables paperless_file_link. */
+  fileLinkBaseUrl?: string;
+}
+
+export function registerDocumentTools(
+  server: McpServer,
+  api: PaperlessAPI,
+  options: DocumentToolOptions = {}
+) {
   server.tool(
     "bulk_edit_documents",
     "Perform bulk operations on multiple documents. Note: 'remove_tag' removes a tag from specific documents (tag remains in system), while 'delete_tag' permanently deletes a tag from the entire system. ⚠️ WARNING: 'delete' method permanently deletes documents and requires confirmation.",
@@ -122,9 +205,13 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
 
   server.tool(
     "post_document",
-    "Upload a new document to Paperless-NGX with optional metadata like title, correspondent, document type, tags, and custom fields.",
+    "Upload a new document to Paperless-NGX with optional metadata like title, correspondent, document type, tags, and custom fields. Pass the file either as 'url' (preferred for anything but tiny files, e.g. a single-use link from elster_file_link or a OneDrive/HERO download link; the server fetches it itself) or as base64 in 'file'. Waits up to 20 s for Paperless to consume it and returns the new document id when done, otherwise the task id.",
     {
-      file: z.string(),
+      file: z.string().optional().describe("Base64-encoded file content"),
+      url: z
+        .string()
+        .optional()
+        .describe("http(s) URL the server downloads the file from instead of 'file'"),
       filename: z.string(),
       title: z.string().optional(),
       created: z.string().optional(),
@@ -137,21 +224,24 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
     },
     withErrorHandling(async (args, extra) => {
       if (!api) throw new Error("Please configure API connection first");
-
-      // Validate base64 input
-      const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
-      if (!base64Regex.test(args.file)) {
-        throw new Error(
-          "Invalid base64-encoded file data. Please provide a valid base64 string."
-        );
-      }
-      const { file, filename, ...metadata } = args;
-      const document = Buffer.from(file, "base64");
+      const { file, url, filename, ...metadata } = args;
+      const document = await loadUploadSource({ file, url });
+      if (document.length === 0) throw new Error("The file is empty.");
 
       const response = await api.postDocument(document, filename, metadata);
-      let result;
+      let result: Record<string, unknown>;
       if (typeof response === "string" && /^\d+$/.test(response)) {
         result = { id: Number(response) };
+      } else if (typeof response === "string") {
+        const task = await waitForConsumeTask(api, response);
+        result = {
+          task_id: response,
+          status: task?.status ?? "PENDING",
+          ...(task?.related_document
+            ? { id: Number(task.related_document) }
+            : {}),
+          ...(task?.status === "FAILURE" ? { error: task.result } : {}),
+        };
       } else {
         result = { status: response };
       }
@@ -159,7 +249,7 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
         content: [
           {
             type: "text",
-            text: JSON.stringify(result),
+            text: JSON.stringify({ ...result, size: document.length }),
           },
         ],
       };
@@ -257,35 +347,81 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
 
   server.tool(
     "download_document",
-    "Download a document file by ID. Returns the document as a base64-encoded resource.",
+    `Download a document file by ID. Returns the document as a base64-encoded resource (archived PDF by default, original file with original=true). Files over ${MAX_INLINE_BYTES / 1024 / 1024} MB are refused; to hand a file to another server (OneDrive, HERO) use paperless_file_link instead.`,
     {
       id: z.number(),
       original: z.boolean().optional(),
     },
     withErrorHandling(async (args, extra) => {
       if (!api) throw new Error("Please configure API connection first");
-      const response = await api.downloadDocument(args.id, args.original);
-      const filename =
-        (typeof response.headers.get === "function"
-          ? response.headers.get("content-disposition")
-          : response.headers["content-disposition"]
-        )
-          ?.split("filename=")[1]
-          ?.replace(/"/g, "") || `document-${args.id}`;
+      const { data, filename, mimeType } = await fetchDocumentFile(
+        api,
+        args.id,
+        args.original
+      );
+      if (data.length > MAX_INLINE_BYTES) {
+        throw new Error(
+          `Document is ${data.length} bytes, too large to return inline. Use paperless_file_link.`
+        );
+      }
       return {
         content: [
           {
             type: "resource",
             resource: {
-              uri: filename,
-              blob: Buffer.from(response.data).toString("base64"),
-              mimeType: "application/pdf",
+              uri: `paperless://documents/${args.id}/${
+                args.original ? "original" : "archive"
+              }/${encodeURIComponent(filename)}`,
+              mimeType,
+              blob: data.toString("base64"),
             },
           },
         ],
       };
     })
   );
+
+  if (options.fileLinkBaseUrl) {
+    const baseUrl = options.fileLinkBaseUrl.replace(/\/+$/, "");
+    server.tool(
+      "paperless_file_link",
+      "Create a single-use download link (valid 10 minutes) for a document. Pass the link as 'sourceUrl' to e.g. onedrive-upload or to HERO, so that server fetches the file itself and no base64 has to go through the chat. The link works exactly once; create a new one for a retry.",
+      {
+        id: z.number().describe("Document ID"),
+        original: z
+          .boolean()
+          .optional()
+          .describe("true = original upload, default = archived PDF"),
+      },
+      withErrorHandling(async (args, extra) => {
+        if (!api) throw new Error("Please configure API connection first");
+        // Fails with 404 for unknown documents, so no dead links are handed out.
+        const doc = await api.getDocument(args.id);
+        const token = fileLinks.create({
+          documentId: args.id,
+          original: Boolean(args.original),
+        });
+        console.log(`file_link created for document ${args.id}`);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                id: args.id,
+                title: doc.title,
+                filename: args.original
+                  ? doc.original_file_name
+                  : doc.archived_file_name ?? doc.original_file_name,
+                url: baseUrl + FILES_ROUTE + token,
+                expiresInSeconds: DEFAULT_TTL_SECONDS,
+                singleUse: true,
+              }),
+            },
+          ],
+        };
+      })
+    );
+  }
 
   server.tool(
     "get_document_thumbnail",

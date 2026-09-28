@@ -9,7 +9,8 @@ import { parseArgs } from "node:util";
 import { PaperlessAPI } from "./api/PaperlessAPI";
 import { registerCorrespondentTools } from "./tools/correspondents";
 import { registerCustomFieldTools } from "./tools/customFields";
-import { registerDocumentTools } from "./tools/documents";
+import { fetchDocumentFile, registerDocumentTools } from "./tools/documents";
+import { FILES_ROUTE, fileLinks } from "./api/fileLinks";
 import { registerDocumentTypeTools } from "./tools/documentTypes";
 import { registerTagTools } from "./tools/tags";
 const { version } = require("../package.json") as { version: string };
@@ -137,7 +138,7 @@ The document tools return JSON data with document IDs that you can use to constr
       `,
     }
   );
-  registerDocumentTools(server, api);
+  registerDocumentTools(server, api, { fileLinkBaseUrl: mcpServerUrl });
   registerTagTools(server, api);
   registerCorrespondentTools(server, api);
   registerDocumentTypeTools(server, api);
@@ -145,7 +146,8 @@ The document tools return JSON data with document IDs that you can use to constr
 
   if (useHttp) {
     const app = express();
-    app.use(express.json());
+    // Base64 uploads via post_document can be large (default limit is 100 kb).
+    app.use(express.json({ limit: "150mb" }));
 
     // Store transports for each session
     const sseTransports: Record<string, SSEServerTransport> = {};
@@ -184,6 +186,30 @@ The document tools return JSON data with document IDs that you can use to constr
         });
       });
     }
+
+    // Single-use links from paperless_file_link. Public (the token is the
+    // credential), so it must be registered before authMiddleware.
+    app.get(`${FILES_ROUTE}:token`, async (req, res) => {
+      const target = fileLinks.consume(String(req.params.token || ""));
+      res.set({ "Cache-Control": "no-store", "X-Robots-Tag": "noindex" });
+      if (!target) {
+        res.status(404).send("not found");
+        return;
+      }
+      try {
+        const file = await fetchDocumentFile(api, target.documentId, target.original);
+        console.log(`file_link fetched for document ${target.documentId}`);
+        res.set({
+          "Content-Type": file.mimeType,
+          "Content-Length": String(file.data.length),
+          "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+        });
+        res.send(file.data);
+      } catch (error) {
+        console.error("file_link fetch failed:", error instanceof Error ? error.message : error);
+        res.status(502).send("download failed");
+      }
+    });
 
     app.use(authMiddleware);
 
