@@ -237,8 +237,11 @@ export function registerDocumentTools(
         result = {
           task_id: response,
           status: task?.status ?? "PENDING",
+          // On failure (e.g. duplicate) related_document is the existing one, not a new id.
           ...(task?.related_document
-            ? { id: Number(task.related_document) }
+            ? task.status === "SUCCESS"
+              ? { id: Number(task.related_document) }
+              : { related_document: Number(task.related_document) }
             : {}),
           ...(task?.status === "FAILURE" ? { error: task.result } : {}),
         };
