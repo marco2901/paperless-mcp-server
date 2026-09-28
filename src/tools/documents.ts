@@ -348,23 +348,61 @@ export function registerDocumentTools(
     })
   );
 
+  const linkBaseUrl = options.fileLinkBaseUrl?.replace(/\/+$/, "");
+
+  function createFileLink(documentId: number, original: boolean) {
+    if (!linkBaseUrl) throw new Error("No public server URL (MCP_SERVER_URL) configured.");
+    const token = fileLinks.create({ documentId, original });
+    console.log(`file_link created for document ${documentId}`);
+    return {
+      url: linkBaseUrl + FILES_ROUTE + token,
+      expiresInSeconds: DEFAULT_TTL_SECONDS,
+      singleUse: true,
+    };
+  }
+
+  // Claude.ai connectors drop the blob of embedded resources with non-image
+  // mime types (PDF, octet-stream), which invalidates the whole tool result.
+  // So by default this returns a single-use link; the base64 resource is opt-in
+  // for directly connected clients.
   server.tool(
     "download_document",
-    `Download a document file by ID. Returns the document as a base64-encoded resource (archived PDF by default, original file with original=true). Files over ${MAX_INLINE_BYTES / 1024 / 1024} MB are refused; to hand a file to another server (OneDrive, HERO) use paperless_file_link instead.`,
+    `Download a document file by ID (archived PDF by default, original upload with original=true). By default returns filename, size, mime type and a single-use download link (10 minutes), which can be passed as 'sourceUrl' to e.g. onedrive-upload or HERO. format='resource' returns the file inline as a base64 resource (max ${MAX_INLINE_BYTES / 1024 / 1024} MB) — only for clients that support binary resources; Claude.ai connectors do not. To read the text of a document use get_document_content instead.`,
     {
       id: z.number(),
       original: z.boolean().optional(),
+      format: z
+        .enum(["link", "resource"])
+        .optional()
+        .describe("'link' (default) or 'resource' (inline base64)"),
     },
     withErrorHandling(async (args, extra) => {
       if (!api) throw new Error("Please configure API connection first");
+      const original = Boolean(args.original);
       const { data, filename, mimeType } = await fetchDocumentFile(
         api,
         args.id,
-        args.original
+        original
       );
+      if (args.format !== "resource" && linkBaseUrl) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                id: args.id,
+                filename,
+                mimeType,
+                size: data.length,
+                ...createFileLink(args.id, original),
+              }),
+            },
+          ],
+        };
+      }
       if (data.length > MAX_INLINE_BYTES) {
         throw new Error(
-          `Document is ${data.length} bytes, too large to return inline. Use paperless_file_link.`
+          `Document is ${data.length} bytes, too large to return inline. Use format 'link' or paperless_file_link.`
         );
       }
       return {
@@ -373,7 +411,7 @@ export function registerDocumentTools(
             type: "resource",
             resource: {
               uri: `paperless://documents/${args.id}/${
-                args.original ? "original" : "archive"
+                original ? "original" : "archive"
               }/${encodeURIComponent(filename)}`,
               mimeType,
               blob: data.toString("base64"),
@@ -384,8 +422,7 @@ export function registerDocumentTools(
     })
   );
 
-  if (options.fileLinkBaseUrl) {
-    const baseUrl = options.fileLinkBaseUrl.replace(/\/+$/, "");
+  if (linkBaseUrl) {
     server.tool(
       "paperless_file_link",
       "Create a single-use download link (valid 10 minutes) for a document. Pass the link as 'sourceUrl' to e.g. onedrive-upload or to HERO, so that server fetches the file itself and no base64 has to go through the chat. The link works exactly once; create a new one for a retry.",
@@ -400,11 +437,6 @@ export function registerDocumentTools(
         if (!api) throw new Error("Please configure API connection first");
         // Fails with 404 for unknown documents, so no dead links are handed out.
         const doc = await api.getDocument(args.id);
-        const token = fileLinks.create({
-          documentId: args.id,
-          original: Boolean(args.original),
-        });
-        console.log(`file_link created for document ${args.id}`);
         return {
           content: [
             {
@@ -415,9 +447,7 @@ export function registerDocumentTools(
                 filename: args.original
                   ? doc.original_file_name
                   : doc.archived_file_name ?? doc.original_file_name,
-                url: baseUrl + FILES_ROUTE + token,
-                expiresInSeconds: DEFAULT_TTL_SECONDS,
-                singleUse: true,
+                ...createFileLink(args.id, Boolean(args.original)),
               }),
             },
           ],
